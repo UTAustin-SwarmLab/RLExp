@@ -1,0 +1,3 @@
+[submodule "verl"]
+	path = verl
+	url = https://github.com/harshg99/verl.git
