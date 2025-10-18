@@ -15,9 +15,10 @@ data:
 
 actor_rollout_ref:
   hybrid_engine: True
-  agent:
-    agent_loop_config_path: src/config/metathought.yaml
+
   rollout:
+    agent:
+      agent_loop_config_path: src/config/metathought.yaml
     name: vllm
     mode: async
     multi_turn:
@@ -35,12 +36,22 @@ actor_rollout_ref:
       vllm: {}
       sglang: {}
   actor:
+    strategy: fsdp2
+    fsdp_config:
+      param_offload: True
+      optimizer_offload: True
+      model_dtype: bfloat16
     use_dynamic_bsz: False
     ppo_max_token_len_per_gpu: 32768
     grad_clip: 1.0
     clip_ratio: 0.30
     entropy_coeff: 0.000
     use_kl_loss: False
+  ref:
+    fsdp_config:
+      param_offload: True
+      optimizer_offload: True
+      model_dtype: bfloat16
 custom_reward_function:
-  path: 
+  path: src/reward/compute_score.py
   name: compute_score

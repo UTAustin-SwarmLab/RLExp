@@ -1,0 +1,2 @@
+- name: simple_agent
+  _target_: src.rollout.SimpleAgentLoop
