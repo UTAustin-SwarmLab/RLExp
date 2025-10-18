@@ -75,15 +75,91 @@ class AgentData:
         # Temporary state for tool calls
         self.tool_calls: list[FunctionCall] = []
 
-
 @register("tool_agent")
+class SimpleAgentLoop(AgentLoopBase):
+    @classmethod
+    def init_class(cls, config, tokenizer, processor, **kwargs):
+        if cls._class_initialized:
+            return
+        cls._class_initialized = True
+        print("Performing class-level SimpleAgentLoop initialization")
+        cls.tokenizer = tokenizer
+        cls.processor = processor
+        cls.apply_chat_template_kwargs = config.data.get("apply_chat_template_kwargs", {})
+        cls.prompt_length = config.actor_rollout_ref.rollout.prompt_length
+        cls.response_length = config.actor_rollout_ref.rollout.response_length
+        cls.system_prompt = tokenizer.apply_chat_template(
+            [{}], add_generation_prompt=False, tokenize=True, **cls.apply_chat_template_kwargs
+        )
+        # Initialize interactions from config file
+        cls.interaction_config_file = config.actor_rollout_ref.rollout.multi_turn.interaction_config_file
+        if cls.interaction_config_file:
+            cls.interaction_map: dict[str, BaseInteraction] = cls._initialize_interactions(cls.interaction_config_file)
+
+    async def _prepare_state(self, messages: List[dict[str, Any]], image_data: Any):
+        if self.processor is not None:
+            raw_prompt = await self.loop.run_in_executor(
+                None,
+                lambda: self.processor.apply_chat_template(
+                    messages,
+                    add_generation_prompt=True,
+                    tokenize=False,
+                    **self.apply_chat_template_kwargs,
+                ),
+            )
+            model_inputs = self.processor(text=[raw_prompt], images=image_data, return_tensors="pt")
+            prompt_ids = model_inputs.pop("input_ids").squeeze(0).tolist()
+        else:
+            prompt_ids = await self.loop.run_in_executor(
+                None,
+                lambda: self.tokenizer.apply_chat_template(
+                    messages,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    **self.apply_chat_template_kwargs,
+                ),
+            )
+        return prompt_ids
+    
+    async def _generate(self, prompt_ids: List[int], image_data: Any, sampling_params: dict[str, Any], request_id: str):
+        response = await self.server_manager.generate(
+            request_id=request_id,
+            prompt_ids=prompt_ids,
+            sampling_params=sampling_params,
+            image_data=image_data,
+        )
+        return response
+    
+    @rollout_trace_op
+    async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
+        messages = list(kwargs["raw_prompt"])  # expected format: [{"role": "user", "content": "..."}, ...]
+        image_data = copy.deepcopy(kwargs.get("multi_modal_data", {}).get("image", None))   
+        metrics: dict[str, Any] = {}
+        request_id = uuid4().hex
+        
+        messages.append(
+            {
+                "role": "user",
+                "content": "Ensure that the final answer to the problem is in the format of `#### <answer>` after thinking."
+            }
+         )
+        prompt_ids = await self._prepare_state(messages, image_data)
+        response = await self._generate(prompt_ids, image_data, sampling_params, request_id)
+        response_text = await self.loop.run_in_executor(
+            None,
+            lambda: self.tokenizer.decode(response.token_ids, skip_special_tokens=True)
+        )
+        print("Response: ", response_text)
+        return response
+    
+@register("metathought_agent")
 class MetaThoughtLoop(AgentLoopBase):
     @classmethod
     def init_class(cls, config, tokenizer, processor, **kwargs):
         if cls._class_initialized:
             return
         cls._class_initialized = True
-        print("Performing class-level ToolAgentLoop initialization")
+        print("Performing class-level MetaThoughtLoop initialization")
 
         # Initialize tools from config file
         cls.tokenizer = tokenizer
@@ -151,10 +227,11 @@ class MetaThoughtLoop(AgentLoopBase):
         metrics: dict[str, Any] = {}
         request_id = uuid4().hex
         
+        
         messages.append(
             {
                 "role": "user",
-                "content": "First generate a meta thought outlining the approach to solve the above problem within the <abstract> </abstract> tags."
+                "content": "First generate only a short plan outlining the approach to solve the above problem within the <abstract></abstract> tags without an explicit solution or reasoning. Example. How many limbs do 2 frogs and 2 cows have altogether? Response:<abstract> I will cpompute the final answer by utilziing the number of limbs in a frog and cow, multiply by the nymber if frogs and cows and add the results together.</abstract>"
             }
          )
         
@@ -177,30 +254,46 @@ class MetaThoughtLoop(AgentLoopBase):
             lambda: self.tokenizer.decode(metathought_ids, skip_special_tokens=True)
         )
         
-        print("Metathought: ", metathought_text)        
+        import numpy as np
+     
         
-        metathought_filtered = re.match(r"<abstract>(.*)</abstract>", metathought_text)
+        # Try multiple tag variants; be tolerant to placement and minor misspellings
+        tag_patterns = [
+            r"<\s*abstract\s*>(.*?)</\s*abstract\s*>"
+        ]
+        metathought_filtered = None
+        for pattern in tag_patterns:
+            m = re.search(pattern, metathought_text, flags=re.IGNORECASE | re.DOTALL)
+            if m:
+                metathought_filtered = m
+                break
+
         # No meta thought texts would have zero reward
-        if metathought_filtered:
-            metathought_text = "<abstract>" + metathought_filtered.group(-1) + "</abstract>"
+        if metathought_filtered is not None:
+            plan_text = metathought_filtered.group(1).strip()
+            metathought_text = "<abstract>" + plan_text + "</abstract>"
         else:
             metathought_text = ""
-        print("FilteredMetathought: ", metathought_text)
 
-        messages.append({"role": "assistant", "content": metathought_text})
+        messages.append(
+            {
+                "role": "assistant", 
+                "content": metathought_text
+            }
+        )
         
         # Build response mask incrementally across phases
         prompt_ids = await self._prepare_state(messages, image_data)
         response_mask: list[int] = []
         prev_len = original_prompt_length
         # 2 for meta thought tokens
-        response_mask.extend([2] * (len(prompt_ids) - prev_len))
+        response_mask.extend([1] * (len(prompt_ids) - prev_len))
         prev_len = len(prompt_ids)
         
         prompt_w_meta_response_length = len(prompt_ids)
         messages.append({
             "role": "user",
-            "content": "Using the previous metathought, now provide the final completion with the answer based solely on the meta thought above. Do not include the meta thought in your output. Ensure that the final answer is within the <answer> </answer> tags.",
+            "content": "Using the plan above in <abstract>...</abstract> tags, now provide the final step by step solution with the answer based solely on the plan. Ensure that the final answer to the problem is in the format of `#### <answer>` after thinking.",
         })
         
         prompt_ids = await self._prepare_state(messages, image_data)
@@ -214,7 +307,7 @@ class MetaThoughtLoop(AgentLoopBase):
             None,
             lambda: self.tokenizer.decode(final_response.token_ids, skip_special_tokens=True)
         )
-        print("Final response: ", final_response_text)
+        # print("Final response: ", final_response_text)
 
         messages.append({"role": "assistant", "content": final_response_text})
         
@@ -228,15 +321,17 @@ class MetaThoughtLoop(AgentLoopBase):
         trimmed_response_ids = response_ids[: self.response_length]
         trimmed_response_mask = response_mask[: self.response_length]
         
-
+        print("Total Response Length: ", len(response_mask))
+        
         output = AgentLoopOutput(
             prompt_ids=original_prompt_ids,
             response_ids=trimmed_response_ids,
             response_mask=trimmed_response_mask,
             multi_modal_data={"image": image_data} if image_data is not None else {},
-            num_turns=2,
+            num_turns=6,
             metrics=metrics,
             extra_fields={},
         )
         output.extra_fields.update({"turn_scores": [], "tool_rewards": []})
         return output
+
