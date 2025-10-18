@@ -34,6 +34,8 @@ def init_config() -> DictConfig:
     config.actor_rollout_ref.rollout.n = 2
     config.actor_rollout_ref.rollout.agent.num_workers = 1
     config.actor_rollout_ref.rollout.skip_tokenizer_init = True
+    config.actor_rollout_ref.rollout.gpu_memory_utilization = 0.5
+    config.trainer.n_gpus_per_node = 2
 
     # Required for agent loops to work with datasets
     config.data.return_raw_chat = True
@@ -61,12 +63,13 @@ def test_metathought_agent_with_rollout(init_config):
             "name": "metathought_agent",
         },
     ]
-    agent_loop_config_path = "/tmp/agent_loop_config_metathought.json"
-    with open(agent_loop_config_path, "w") as f:
-        json.dump(agent_loop_config, f)
+    agent_loop_config_path = "src/config/metathought.yaml"
+    # with open(agent_loop_config_path, "w") as f:
+    #     json.dump(agent_loop_config, f)
 
     init_config.actor_rollout_ref.rollout.agent.agent_loop_config_path = agent_loop_config_path
 
+    print("Initializing agent loop manager")
     agent_loop_manager = AgentLoopManager(init_config)
 
     # Build input batch
