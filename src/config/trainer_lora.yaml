@@ -15,7 +15,10 @@ data:
 
 actor_rollout_ref:
   hybrid_engine: True
-  
+  model:
+    lora_rank: 32
+    lora_alpha: 32
+
   rollout:
     agent:
       agent_loop_config_path: src/config/metathought.yaml
