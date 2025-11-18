@@ -20,6 +20,7 @@ import json
 import os
 import re
 import datasets
+import pandas as pd
 from verl.utils.hdfs_io import copy, makedirs
 from verl.utils.reward_score.math_reward import last_boxed_only_string, remove_boxed
 
@@ -56,8 +57,8 @@ if __name__ == "__main__":
     # Use mirror repo: DigitalLearningGmbH/MATH-lighteval
     train_data_source = "DigitalLearningGmbH/MATH-lighteval"
     
-    test_data_source = {"DigitalLearningGmbH/MATH-lighteval": (extract_solution_boxed, "problem", "solution"),
-                        "math-ai/math500": (extract_solution, "problem", "answer"), # problem answer
+    # test_data_source = {"DigitalLearningGmbH/MATH-lighteval": (extract_solution_boxed, "problem", "solution"),
+    test_data_source = {"math-ai/math500": (extract_solution, "problem", "answer"), # problem answer
                         "math-ai/amc23": (extract_solution, "question", "answer"), # question answer
                         "math-ai/olympiadbench": (extract_solution_list, "question", "final_answer"), # question final answer
                         "math-ai/aime24": (extract_solution_boxed, "problem", "solution"), # problem solution
@@ -89,11 +90,18 @@ if __name__ == "__main__":
     # add a row to each data item that represents a unique id
     def make_map_fn(split, data_source, delta=0):
         def process_fn(example, idx):
-            question = example.pop(test_data_source[data_source][1])
+            if split == "train":
+                question = example.pop("problem")
+            else:
+                question = example.pop(test_data_source[data_source][1])
 
             question = question + " " + instruction_following
 
-            answer = example.pop(test_data_source[data_source][2])
+            if split == "train":
+                answer = example.pop("solution")
+            else:
+                answer = example.pop(test_data_source[data_source][2])
+
             solution = extract_solution_boxed(answer) if split =="train" else test_data_source[data_source][0](answer)
 
             data = {
