@@ -5,17 +5,7 @@ set -x
 
 ulimit -n 65535
 
-export NCCL_ASYNC_ERROR_HANDLING=1
-export NCCL_DEBUG=WARN
-export CUDA_DEVICE_MAX_CONNECTIONS=1
-export TORCH_NCCL_BLOCKING_WAIT=1
-export NCCL_IB_DISABLE=1
-export NCCL_NET_GDR_LEVEL=0
-export OMP_NUM_THREADS=1
-# vLLM's CuMemAllocator memory pool is incompatible with expandable_segments
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False
-export MASTER_PORT=${MASTER_PORT:-6360}
-export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 
 PROJECT_DIR="../../../src"
 CONFIG_PATH="$PROJECT_DIR/config"
@@ -24,7 +14,7 @@ dataset=$1
 
 python3 -m verl.trainer.main_ppo \
     --config-path="$CONFIG_PATH" \
-    --config-name='trainer' \
+    --config-name='trainer_lora' \
     algorithm.adv_estimator=grpo \
     data.train_batch_size=128 \
     data.max_prompt_length=512 \
@@ -38,8 +28,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.ppo_mini_batch_size=128 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
     actor_rollout_ref.actor.use_kl_loss=False \
-    actor_rollout_ref.actor.fsdp_config.fsdp_size=4 \
-    actor_rollout_ref.actor.fsdp_config.offload_policy=True \
+    actor_rollout_ref.actor.fsdp_config.fsdp_size=2 \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=1 \
     actor_rollout_ref.actor.clip_ratio_high=0.28 \
     actor_rollout_ref.actor.kl_loss_coef=0.001 \
@@ -50,32 +39,30 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.rollout.free_cache_engine=True \
-    actor_rollout_ref.rollout.load_format=safetensors \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=32 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=4 \
-    actor_rollout_ref.rollout.max_num_batched_tokens=16384 \
+    actor_rollout_ref.rollout.max_num_batched_tokens=32768 \
     actor_rollout_ref.rollout.max_model_len=4608 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
-    actor_rollout_ref.rollout.n=2 \
+    actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.rollout.over_sample_rate=0.1 \
     actor_rollout_ref.rollout.mode=async \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=32 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.ref.fsdp_config.optimizer_offload=True \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='rlexp' \
-    trainer.experiment_name=qwen3-1.7b-$dataset-metathought \
-    trainer.n_gpus_per_node=8 \
+    trainer.experiment_name='qwen3-1.7b-$dataset-metathought' \
+    trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.save_freq=50 \
     trainer.test_freq=20 \
     data.train_files=/home/hg22723/projects/rlexp/data/$dataset/train.parquet \
     data.val_files=/home/hg22723/projects/rlexp/data/$dataset/test.parquet \
     trainer.total_epochs=10 \
-    trainer.val_before_train=True \
+    trainer.val_before_train=False \
     trainer.log_val_generations=20 \
 
